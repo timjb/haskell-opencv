@@ -3,9 +3,15 @@
 
 module OpenCV.Aruco where
 
+import "base" Control.Exception ( mask_ )
 import "base" Data.Int
+import "base" Data.Traversable (for)
+import qualified "vector" Data.Vector as V
 import "base" Data.Word
 import "base" Foreign.ForeignPtr ( ForeignPtr, withForeignPtr )
+import "base" Foreign.Marshal.Alloc ( alloca )
+import "base" Foreign.Marshal.Array ( peekArray )
+import "base" Foreign.Storable ( peek )
 import qualified "inline-c" Language.C.Inline as C
 import qualified "inline-c-cpp" Language.C.Inline.Cpp as C
 import qualified "inline-c" Language.C.Inline.Unsafe as CU
@@ -25,6 +31,7 @@ C.context openCvCtx
 C.include "opencv2/aruco.hpp"
 C.include "opencv2/aruco/charuco.hpp"
 C.include "opencv2/core.hpp"
+C.include "iostream"
 
 C.include "aruco.hpp"
 
@@ -210,3 +217,97 @@ drawCharucoBoard board size marginSize borderBits = unsafeWrapException $ do
   where
     c'marginSize = fromIntegral marginSize
     c'borderBits = fromIntegral borderBits
+
+data MarkerDetectionResult =
+  MarkerDetectionResult {detectedCorners :: V.Vector (V.Vector Point2f)
+                        ,detectedIds :: V.Vector Int32}
+
+detectMarkers
+  :: Mat ('S [w, h]) channels depth
+  -> Dictionary
+  -> MarkerDetectionResult
+detectMarkers image dictionary = unsafePerformIO $
+  withPtr image $ \srcPtr ->
+  withPtr dictionary $ \dictPtr ->
+  alloca $ \markerCornerPointsPtrPtr ->
+  alloca $ \markerCornerPointsLengthsPtrPtr ->
+  alloca $ \markerCornerLengthsPtr ->
+  alloca $ \idsPtrPtr ->
+  alloca $ \idsLengthPtr -> mask_ $ do
+    [CU.block| void {
+      std::vector<std::vector<cv::Point2f>> corners;
+      std::vector<int> ids;
+
+      cv::aruco::detectMarkers(
+        *$(Mat * srcPtr),
+        *$(Ptr_ArucoDictionary * dictPtr),
+        corners,
+        ids
+      );
+
+      int * idsArray = new int[ids.size()];
+      int * * idsPtr = $(int32_t * * idsPtrPtr);
+      *idsPtr = idsArray;
+      *$(int32_t * idsLengthPtr) = ids.size();
+
+      for(std::vector<int>::size_type i = 0; i != ids.size(); i++) {
+        idsArray[i] = ids[i];
+      }
+
+      cv::Point2f * * * * markerCornerPointsPtrPtr = $(Point2f * * * * markerCornerPointsPtrPtr);
+      cv::Point2f * * * markerCornerPoints = new cv::Point2f * * [corners.size()];
+      *markerCornerPointsPtrPtr = markerCornerPoints;
+
+      int * * markerCornerLengthsPtrPtr = $(int32_t * * markerCornerPointsLengthsPtrPtr);
+      int * markerCornerLengths = new int[corners.size()];
+      *markerCornerLengthsPtrPtr = markerCornerLengths;
+      *$(int32_t * markerCornerLengthsPtr) = corners.size();
+
+      for(std::vector<std::vector<cv::Point2f>>::size_type i = 0; i != corners.size(); i++) {
+        std::vector<cv::Point2f> & markerPoints = corners[i];
+        markerCornerPoints[i] = new cv::Point2f * [markerPoints.size()];
+        markerCornerLengths[i] = markerPoints.size();
+        for(std::vector<cv::Point2f>::size_type j = 0; j != markerPoints.size(); j++) {
+          cv::Point2f & corner = markerPoints[j];
+          markerCornerPoints[i][j] = new cv::Point2f(corner.x, corner.y);
+        }
+      }
+    }|]
+
+    idsLength <- peek idsLengthPtr
+    ids <- peek idsPtrPtr >>= peekArray (fromIntegral idsLength)
+
+    -- The number of markers found
+    numMarkers <- peek markerCornerLengthsPtr
+
+    -- The number of corner points found for each marker
+    markerCornerPointsLengths <-
+      peek markerCornerPointsLengthsPtrPtr >>=
+      peekArray (fromIntegral numMarkers)
+
+    -- A list of Ptr (Ptr C'Point2f) - the unmarshalled corner points arrays
+    unmarshalledMarkerCornerPoints <-
+      peek markerCornerPointsPtrPtr >>=
+      peekArray (fromIntegral numMarkers)
+
+    markerCornerPoints <-
+      for (zip unmarshalledMarkerCornerPoints markerCornerPointsLengths) $ \(markerCornerPointsPtr,n) ->
+      fmap V.fromList
+           (peekArray (fromIntegral n)
+                      markerCornerPointsPtr >>=
+            mapM (fromPtr . pure))
+
+    _ <- [CU.block| void {
+      cv::Point2f * * * markerCornerPoints = *$(Point2f * * * * markerCornerPointsPtrPtr);
+      int * markerCornerLengths = *$(int32_t * * markerCornerPointsLengthsPtrPtr);
+
+      for (int i = 0; i < *$(int32_t * markerCornerLengthsPtr); i++) {
+        delete[] markerCornerPoints[i];
+      }
+      delete[] *$(Point2f * * * * markerCornerPointsPtrPtr);
+      delete[] *$(int32_t * * markerCornerPointsLengthsPtrPtr);
+      delete[] *$(int32_t * * idsPtrPtr);
+    }|]
+
+    return MarkerDetectionResult {detectedCorners = V.fromList markerCornerPoints
+                                 ,detectedIds = V.fromList ids}

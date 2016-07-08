@@ -109,6 +109,8 @@ main = defaultMain $ testGroup "opencv"
     , testGroup "Video"
       [
       ]
+    , testGroup "Aruco"
+      [ HU.testCase "detectMarkers" testArucoDetectMarkers]
     ]
 
 testFindFundamentalMat_noPoints :: HU.Assertion
@@ -304,6 +306,30 @@ testMatToM33
     -> V3 (V3 e)
     -> HU.Assertion
 testMatToM33 m v = assertEqual "" v $ matToM33 m
+
+--------------------------------------------------------------------------------
+
+testArucoDetectMarkers :: HU.Assertion
+testArucoDetectMarkers =
+  do let dictionary = predefinedDictionary DICT_5X5_100
+         board =
+           exceptError $
+           drawCharucoBoard (createCharucoBoard 2 2 1 0.5 dictionary)
+                            (V2 512 512 :: V2 Int32)
+                            4
+                            1
+         detected = detectMarkers board dictionary
+     assertEqual "Expected IDs were found"
+                 (V.fromList [1,0])
+                 (detectedIds detected)
+     assertEqual
+       "Expected IDs were found"
+       (V.fromList
+          [V.fromList
+             [V2 318.0 318.0,V2 442.0 318.0,V2 442.0 442.0,V2 318.0 442.0]
+          ,V.fromList [V2 67.0 67.0,V2 191.0 67.0,V2 191.0 191.0,V2 67.0 191.0]])
+       ((V.map . V.map) fromPoint2f
+                        (detectedCorners detected) :: V.Vector (V.Vector (V2 Float)))
 
 --------------------------------------------------------------------------------
 
