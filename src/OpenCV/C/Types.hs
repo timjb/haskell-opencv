@@ -80,6 +80,12 @@ type C'TrackbarCallback
    -> Ptr () -- ^ Optional pointer to user data.
    -> IO ()
 
+-- | Haskell representation of an OpenCV @cv::Ptr<cv::aruco::Dictionary>@ object
+data C'Ptr_ArucoDictionary
+
+-- | Haskell representation of an OpenCV @cv::Ptr<cv::aruco::CharucoBoard>@ object
+data C'Ptr_CharucoBoard
+
 --------------------------------------------------------------------------------
 
 -- | Information about the storage requirements of values in C

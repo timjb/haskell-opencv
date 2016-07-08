@@ -67,4 +67,7 @@ openCvTypesTable = M.fromList
 
   , ( C.TypeName "MouseCallback"   , [t| FunPtr C'MouseCallback    |] )
   , ( C.TypeName "TrackbarCallback", [t| FunPtr C'TrackbarCallback |] )
+
+  , ( C.TypeName "Ptr_ArucoDictionary", [t| C'Ptr_ArucoDictionary |] )
+  , ( C.TypeName "Ptr_CharucoBoard", [t| C'Ptr_CharucoBoard |] )
   ]

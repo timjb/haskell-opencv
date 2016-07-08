@@ -19,7 +19,8 @@ library
     hs-source-dirs: src
     include-dirs: include
     c-sources:
-        src/OpenCV/Calib3d.cpp
+        src/OpenCV/Aruco.cpp
+      , src/OpenCV/Calib3d.cpp
       , src/OpenCV/C/PlacementNew.cpp
       , src/OpenCV/Core/ArrayOps.cpp
       , src/OpenCV/Core/Types.cpp
@@ -65,6 +66,7 @@ library
 
     exposed-modules:
         OpenCV
+        OpenCV.Aruco
         OpenCV.Calib3d
         OpenCV.Core
         OpenCV.Core.ArrayOps

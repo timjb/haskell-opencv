@@ -1,7 +1,8 @@
 {-# OPTIONS_GHC -fno-warn-dodgy-exports #-}
 
 module OpenCV
-    ( module OpenCV.Calib3d
+    ( module OpenCV.Aruco
+    , module OpenCV.Calib3d
     , module OpenCV.Core
     , module OpenCV.Core.ArrayOps
     , module OpenCV.Core.Types
@@ -28,6 +29,7 @@ module OpenCV
     , module OpenCV.JSON
     ) where
 
+import OpenCV.Aruco
 import OpenCV.Calib3d
 import OpenCV.Core
 import OpenCV.Core.ArrayOps
