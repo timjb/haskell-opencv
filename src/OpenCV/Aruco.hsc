@@ -4,9 +4,11 @@
 module OpenCV.Aruco where
 
 import "base" Control.Exception ( mask_ )
+import "base" Control.Monad ( join )
 import "base" Data.Int
 import "base" Data.Traversable (for)
 import qualified "vector" Data.Vector as V
+import qualified "vector" Data.Vector.Storable as SV
 import "base" Data.Word
 import "base" Foreign.ForeignPtr ( ForeignPtr, withForeignPtr )
 import "base" Foreign.Marshal.Alloc ( alloca )
@@ -18,6 +20,7 @@ import qualified "inline-c" Language.C.Inline.Unsafe as CU
 import "this" OpenCV.C.Inline ( openCvCtx )
 import "this" OpenCV.C.Types
 import "this" OpenCV.Core.Types
+import "this" OpenCV.Core.Types.Internal
 import "this" OpenCV.Core.Types.Mat.Internal
 import "this" OpenCV.Exception.Internal
 import "this" OpenCV.Internal
@@ -218,6 +221,8 @@ drawCharucoBoard board size marginSize borderBits = unsafeWrapException $ do
     c'marginSize = fromIntegral marginSize
     c'borderBits = fromIntegral borderBits
 
+--------------------------------------------------------------------------------
+
 data MarkerDetectionResult =
   MarkerDetectionResult {detectedCorners :: V.Vector (V.Vector Point2f)
                         ,detectedIds :: V.Vector Int32}
@@ -299,7 +304,6 @@ detectMarkers image dictionary = unsafePerformIO $
 
     _ <- [CU.block| void {
       cv::Point2f * * * markerCornerPoints = *$(Point2f * * * * markerCornerPointsPtrPtr);
-      int * markerCornerLengths = *$(int32_t * * markerCornerPointsLengthsPtrPtr);
 
       for (int i = 0; i < *$(int32_t * markerCornerLengthsPtr); i++) {
         delete[] markerCornerPoints[i];
@@ -311,3 +315,105 @@ detectMarkers image dictionary = unsafePerformIO $
 
     return MarkerDetectionResult {detectedCorners = V.fromList markerCornerPoints
                                  ,detectedIds = V.fromList ids}
+
+--------------------------------------------------------------------------------
+
+newtype Board = Board { unBoard :: ForeignPtr C'Ptr_Board }
+
+type instance C Board = C'Ptr_Board
+
+instance WithPtr Board where
+  withPtr = withForeignPtr . unBoard
+
+instance FromPtr Board where
+  fromPtr = objFromPtr Board $ \ptr ->
+    [CU.block| void {
+      Ptr<aruco::Board> * boardPtrPtr =
+        $(Ptr_Board * ptr);
+      boardPtrPtr->release();
+      delete boardPtrPtr;
+    }|]
+
+charucoBoardToBoard :: CharucoBoard -> Board
+charucoBoardToBoard b = unsafePerformIO $
+  withPtr b $ \boardPtr ->
+  fromPtr
+    [CU.block|Ptr_Board * {
+      return new Ptr<aruco::Board>(
+        (*$(Ptr_CharucoBoard * boardPtr)).staticCast<aruco::Board>()
+      );
+    }|]
+
+--------------------------------------------------------------------------------
+
+calibrateCameraAruco
+  :: (ToSize2i size2i)
+  => V.Vector MarkerDetectionResult
+  -- ^ A 'Vector' of marker detection results for each captured video frame.
+  -> Board
+  -- ^ An ArUco borad.
+  -> size2i
+  -> (Mat ('S ['S 3, 'S 3]) ('S 1) ('S Float), V.Vector Float)
+calibrateCameraAruco markers board size = unsafePerformIO $ do
+  cameraMatrix <- newEmptyMat
+  alloca $ \distCoeffsLengthPtr ->
+    alloca $ \distCoeffsPtrPtr ->
+    withPtr board $ \boardPtr ->
+    withPtr cameraMatrix $ \cameraMatrixPtr ->
+    withArrayPtr flattenedCorners $ \markerCornersPtr ->
+    withPtr (toSize2i size) $ \sizePtr -> do
+      _ <- [CU.block| void {
+             std::vector<int> ids;
+             for (int i = 0; i < $vec-len:c'markerIds; i++) {
+                ids.push_back($vec-ptr:(int * c'markerIds)[i]);
+             }
+
+             std::vector<int> counter;
+             std::vector<std::vector<cv::Point2f>> corners;
+             int k = 0;
+             for (int i = 0; i < $vec-len:c'markerCounts; i++) {
+                int count = $vec-ptr:(int * c'markerCounts)[i];
+                counter.push_back(count);
+                std::vector<cv::Point2f> markerCorners;
+                for (int j = 0; j < count; j++) {
+                  markerCorners.push_back($(Point2f * markerCornersPtr)[k++]);
+                }
+                corners.push_back(markerCorners);
+             }
+
+             std::vector<float> distCoeffs;
+             cv::aruco::calibrateCameraAruco(
+               corners,
+               ids,
+               counter,
+               *$(Ptr_Board * boardPtr),
+               *$(Size2i * sizePtr),
+               *$(Mat * cameraMatrixPtr),
+               distCoeffs
+             );
+
+             *$(int32_t * distCoeffsLengthPtr) = distCoeffs.size();
+
+             float * distCoeffsPtr = new float [distCoeffs.size()];
+             *$(float * * distCoeffsPtrPtr) = distCoeffsPtr;
+
+             for (std::vector<float>::size_type i = 0; i != distCoeffs.size(); i++) {
+               distCoeffsPtr[i] = distCoeffs[i];
+             }
+           }|]
+      distCoeffs <-
+        fmap V.fromList
+             (join (peekArray <$> fmap fromIntegral (peek distCoeffsLengthPtr)
+                              <*> peek distCoeffsPtrPtr))
+      return (unsafeCoerceMat cameraMatrix, fmap realToFrac distCoeffs)
+  where
+    c'markerCounts :: SV.Vector C.CInt
+    c'markerCounts = SV.convert (V.map (fromIntegral . V.length . detectedCorners) markers)
+
+    c'markerIds :: SV.Vector C.CInt
+    c'markerIds =
+      SV.convert (V.concat (V.toList (V.map (V.map fromIntegral . detectedIds)
+                                            markers)))
+
+    flattenedCorners :: V.Vector Point2f
+    flattenedCorners = V.concat (V.toList (V.map (V.concat . V.toList . detectedCorners) markers))

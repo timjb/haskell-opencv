@@ -86,6 +86,9 @@ data C'Ptr_ArucoDictionary
 -- | Haskell representation of an OpenCV @cv::Ptr<cv::aruco::CharucoBoard>@ object
 data C'Ptr_CharucoBoard
 
+-- | Haskell representation of an OpenCV @cv::Ptr<cv::aruco::Board>@ object
+data C'Ptr_Board
+
 --------------------------------------------------------------------------------
 
 -- | Information about the storage requirements of values in C
