@@ -50,9 +50,11 @@ module OpenCV.ImgProc.GeometricImgTransform
     , warpPerspective
     , invertAffineTransform
     , getRotationMatrix2D
+    , undistort
     ) where
 
 import "base" Data.Int ( Int32 )
+import "base" Foreign.Marshal.Array ( withArray )
 import "base" Foreign.C.Types ( CDouble )
 import "base" System.IO.Unsafe ( unsafePerformIO )
 import qualified "inline-c" Language.C.Inline as C
@@ -68,6 +70,7 @@ import "this" OpenCV.Exception.Internal
 import "this" OpenCV.ImgProc.Types
 import "this" OpenCV.ImgProc.Types.Internal
 import "this" OpenCV.TypeLevel
+import qualified "vector" Data.Vector as V
 
 --------------------------------------------------------------------------------
 
@@ -297,3 +300,25 @@ getRotationMatrix2D center angle scale = unsafeCoerceMat $ unsafePerformIO $
   where
     c'angle = realToFrac angle
     c'scale = realToFrac scale
+
+undistort :: Mat (ShapeT [3, 3]) ('S 1) ('S Double)
+          -> V.Vector Float
+          -> Mat ('S [h, w]) channels depth
+          -> CvExcept (Mat ('S [h, w]) channels depth)
+undistort cameraMatrix distCoeffs src =
+  unsafeWrapException $ do
+    dst <- newEmptyMat
+    handleCvException (pure $ unsafeCoerceMat dst) $
+      withPtr src $ \srcPtr ->
+      withPtr cameraMatrix $ \cameraMatrixPtr ->
+      withArray (V.toList (V.map realToFrac distCoeffs)) $ \distCoeffsPtr ->
+      withPtr dst $ \dstPtr ->
+        [cvExcept|
+          cv::_InputArray distCoeffs = cv::_InputArray($(float * distCoeffsPtr), $(int32_t c'numDistCoeffs));
+          cv::undistort(*$(Mat * srcPtr)
+                       ,*$(Mat * dstPtr)
+                       ,*$(Mat * cameraMatrixPtr)
+                       ,distCoeffs);
+        |]
+  where
+    c'numDistCoeffs = fromIntegral (V.length distCoeffs)
