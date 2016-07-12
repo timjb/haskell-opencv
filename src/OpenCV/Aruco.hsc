@@ -399,7 +399,7 @@ calibrateCameraAruco
   -> Board
   -- ^ An ArUco borad.
   -> size2i
-  -> (Mat ('S ['S 3, 'S 3]) ('S 1) ('S Float), V.Vector Float)
+  -> (Mat (ShapeT [3, 3]) ('S 1) ('S Double), V.Vector Float)
 calibrateCameraAruco markers board size = unsafePerformIO $ do
   cameraMatrix <- newEmptyMat
   alloca $ \distCoeffsLengthPtr ->
@@ -416,15 +416,19 @@ calibrateCameraAruco markers board size = unsafePerformIO $ do
 
              std::vector<int> counter;
              std::vector<std::vector<cv::Point2f>> corners;
-             int k = 0;
-             for (int i = 0; i < $vec-len:c'markerCounts; i++) {
-                int count = $vec-ptr:(int * c'markerCounts)[i];
-                counter.push_back(count);
-                std::vector<cv::Point2f> markerCorners;
-                for (int j = 0; j < count; j++) {
-                  markerCorners.push_back($(Point2f * markerCornersPtr)[k++]);
+             int globalCorner = 0;
+             int globalMarker = 0;
+             for (int i = 0; i < $vec-len:c'frameMarkerCounts; i++) {
+                int frameMarkerCount = $vec-ptr:(int * c'frameMarkerCounts)[i];
+                counter.push_back(frameMarkerCount);
+                for (int marker = 0; marker < frameMarkerCount; marker++) {
+                  std::vector<cv::Point2f> markerCorners;
+                  int cornerCount = $vec-ptr:(int * c'markerCornerPointsCount)[globalMarker++];
+                  for (int j = 0; j < cornerCount; j++) {
+                    markerCorners.push_back($(Point2f * markerCornersPtr)[globalCorner++]);
+                  }
+                  corners.push_back(markerCorners);
                 }
-                corners.push_back(markerCorners);
              }
 
              std::vector<float> distCoeffs;
@@ -453,8 +457,14 @@ calibrateCameraAruco markers board size = unsafePerformIO $ do
                               <*> peek distCoeffsPtrPtr))
       return (unsafeCoerceMat cameraMatrix, fmap realToFrac distCoeffs)
   where
-    c'markerCounts :: SV.Vector C.CInt
-    c'markerCounts = SV.convert (V.map (fromIntegral . V.length . detectedCorners) markers)
+    c'frameMarkerCounts :: SV.Vector C.CInt
+    c'frameMarkerCounts =
+      SV.convert (V.map (fromIntegral . V.length . detectedCorners) markers)
+
+    c'markerCornerPointsCount :: SV.Vector C.CInt
+    c'markerCornerPointsCount =
+      SV.convert (V.concat (V.toList (V.map (V.map (fromIntegral . V.length) . detectedCorners)
+                                            markers)))
 
     c'markerIds :: SV.Vector C.CInt
     c'markerIds =
