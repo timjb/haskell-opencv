@@ -4,20 +4,28 @@
 module OpenCV.Video
     ( -- * Motion Analysis and Object Tracking
       estimateRigidTransform
+    , VideoCapture
+    , openVideoCapture
+    , retrieveVideoFrame
     ) where
 
+import "transformers" Control.Monad.Trans.Except
+import "base" Data.Int
+import qualified "vector" Data.Vector as V
+import "base" Data.Word
+import "base" Foreign.ForeignPtr ( ForeignPtr, withForeignPtr )
 import "base" Foreign.Marshal.Utils ( fromBool )
 import qualified "inline-c" Language.C.Inline as C
 import qualified "inline-c-cpp" Language.C.Inline.Cpp as C
+import qualified "inline-c" Language.C.Inline.Unsafe as CU
 import "this" OpenCV.C.Inline ( openCvCtx )
 import "this" OpenCV.C.Types
-import "this" OpenCV.Exception.Internal
 import "this" OpenCV.Core.Types.Internal
 import "this" OpenCV.Core.Types.Mat
 import "this" OpenCV.Core.Types.Mat.Internal
+import "this" OpenCV.Exception.Internal
+import "this" OpenCV.Internal
 import "this" OpenCV.TypeLevel
-import "transformers" Control.Monad.Trans.Except
-import qualified "vector" Data.Vector as V
 
 --------------------------------------------------------------------------------
 
@@ -25,11 +33,13 @@ C.context openCvCtx
 
 C.include "opencv2/core.hpp"
 C.include "opencv2/video.hpp"
+C.include "opencv2/videoio.hpp"
 C.using "namespace cv"
 
 #include <bindings.dsl.h>
 #include "opencv2/core.hpp"
 #include "opencv2/video.hpp"
+#include "opencv2/videoio.hpp"
 
 --------------------------------------------------------------------------------
 
@@ -73,3 +83,34 @@ estimateRigidTransform src dst fullAffine = do
     c'srcLen     = fromIntegral $ V.length src
     c'dstLen     = fromIntegral $ V.length dst
     c'fullAffine = fromBool fullAffine
+
+newtype VideoCapture =
+  VideoCapture {unVideoCapture :: ForeignPtr C'VideoCapture}
+
+type instance C VideoCapture = C'VideoCapture
+
+instance WithPtr VideoCapture where
+  withPtr = withForeignPtr . unVideoCapture
+
+instance FromPtr VideoCapture where
+  fromPtr = objFromPtr VideoCapture $ \ptr ->
+    [CU.block| void {
+      cv::VideoCapture * dictionaryPtrPtr =
+        $(VideoCapture * ptr);
+      dictionaryPtrPtr->release();
+      delete dictionaryPtrPtr;
+    }|]
+
+openVideoCapture :: Int32 -> IO VideoCapture
+openVideoCapture camId = fromPtr
+  [C.block| VideoCapture * { return new cv::VideoCapture($(int32_t camId)); } |]
+
+retrieveVideoFrame :: VideoCapture -> IO (Mat ('S ['D, 'D]) 'D ('S Word8))
+retrieveVideoFrame video = do
+  dst <- newEmptyMat
+  withPtr video $ \v ->
+    withPtr dst $ \dstPtr ->
+      [C.block| void {
+        *$(VideoCapture * v) >> *$(Mat * dstPtr);
+      }|]
+  return (unsafeCoerceMat dst)

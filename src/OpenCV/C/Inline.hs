@@ -71,4 +71,5 @@ openCvTypesTable = M.fromList
   , ( C.TypeName "Ptr_ArucoDictionary", [t| C'Ptr_ArucoDictionary |] )
   , ( C.TypeName "Ptr_CharucoBoard", [t| C'Ptr_CharucoBoard |] )
   , ( C.TypeName "Ptr_Board", [t| C'Ptr_Board |] )
+  , ( C.TypeName "VideoCapture", [t| C'VideoCapture |])
   ]
