@@ -318,7 +318,7 @@ testArucoDetectMarkers =
                             (V2 512 512 :: V2 Int32)
                             4
                             1
-         detected = detectMarkers board dictionary
+         (detected,_) = detectMarkers board dictionary
      assertEqual "Expected IDs were found"
                  (V.fromList [1,0])
                  (detectedIds detected)

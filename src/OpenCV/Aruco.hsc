@@ -228,26 +228,32 @@ data MarkerDetectionResult =
                         ,detectedIds :: V.Vector Int32}
 
 detectMarkers
-  :: Mat ('S [w, h]) channels depth
+  :: Mat ('S [h, w]) channels depth
   -> Dictionary
-  -> MarkerDetectionResult
+  -> (MarkerDetectionResult,V.Vector (V.Vector Point2f))
 detectMarkers image dictionary = unsafePerformIO $
   withPtr image $ \srcPtr ->
   withPtr dictionary $ \dictPtr ->
   alloca $ \markerCornerPointsPtrPtr ->
   alloca $ \markerCornerPointsLengthsPtrPtr ->
   alloca $ \markerCornerLengthsPtr ->
+  alloca $ \rejectedPointsPtrPtr ->
+  alloca $ \rejectedPointsLengthsPtrPtr ->
+  alloca $ \rejectedLengthsPtr ->
   alloca $ \idsPtrPtr ->
   alloca $ \idsLengthPtr -> mask_ $ do
     [CU.block| void {
       std::vector<std::vector<cv::Point2f>> corners;
+      std::vector<std::vector<cv::Point2f>> rejected;
       std::vector<int> ids;
 
       cv::aruco::detectMarkers(
         *$(Mat * srcPtr),
         *$(Ptr_ArucoDictionary * dictPtr),
         corners,
-        ids
+        ids,
+        cv::aruco::DetectorParameters::create(),
+        rejected
       );
 
       int * idsArray = new int[ids.size()];
@@ -277,6 +283,25 @@ detectMarkers image dictionary = unsafePerformIO $
           markerCornerPoints[i][j] = new cv::Point2f(corner.x, corner.y);
         }
       }
+
+      cv::Point2f * * * * rejectedPointsPtrPtr = $(Point2f * * * * rejectedPointsPtrPtr);
+      cv::Point2f * * * rejectedPoints = new cv::Point2f * * [rejected.size()];
+      *rejectedPointsPtrPtr = rejectedPoints;
+
+      int * * rejectedLengthsPtrPtr = $(int32_t * * rejectedPointsLengthsPtrPtr);
+      int * rejectedLengths = new int[rejected.size()];
+      *rejectedLengthsPtrPtr = rejectedLengths;
+      *$(int32_t * rejectedLengthsPtr) = rejected.size();
+
+      for(std::vector<std::vector<cv::Point2f>>::size_type i = 0; i != rejected.size(); i++) {
+        std::vector<cv::Point2f> & markerPoints = rejected[i];
+        rejectedPoints[i] = new cv::Point2f * [markerPoints.size()];
+        rejectedLengths[i] = markerPoints.size();
+        for(std::vector<cv::Point2f>::size_type j = 0; j != markerPoints.size(); j++) {
+          cv::Point2f & corner = markerPoints[j];
+          rejectedPoints[i][j] = new cv::Point2f(corner.x, corner.y);
+        }
+      }
     }|]
 
     idsLength <- peek idsLengthPtr
@@ -302,6 +327,26 @@ detectMarkers image dictionary = unsafePerformIO $
                       markerCornerPointsPtr >>=
             mapM (fromPtr . pure))
 
+    -- The number of rejected markers found
+    numRejected <- peek rejectedLengthsPtr
+
+    -- The number of rejected corner points found for each rejected marker
+    rejectedPointsLengths <-
+      peek rejectedPointsLengthsPtrPtr >>=
+      peekArray (fromIntegral numRejected)
+
+    -- A list of Ptr (Ptr C'Point2f) - the unmarshalled rejected points arrays
+    unmarshalledRejectedPoints <-
+      peek rejectedPointsPtrPtr >>=
+      peekArray (fromIntegral numRejected)
+
+    rejectedPoints <-
+      for (zip unmarshalledRejectedPoints rejectedPointsLengths) $ \(rejectedPointsPtr,n) ->
+      fmap V.fromList
+           (peekArray (fromIntegral n)
+                      rejectedPointsPtr >>=
+            mapM (fromPtr . pure))
+
     _ <- [CU.block| void {
       cv::Point2f * * * markerCornerPoints = *$(Point2f * * * * markerCornerPointsPtrPtr);
 
@@ -313,8 +358,9 @@ detectMarkers image dictionary = unsafePerformIO $
       delete[] *$(int32_t * * idsPtrPtr);
     }|]
 
-    return MarkerDetectionResult {detectedCorners = V.fromList markerCornerPoints
+    return (MarkerDetectionResult {detectedCorners = V.fromList markerCornerPoints
                                  ,detectedIds = V.fromList ids}
+           ,V.fromList rejectedPoints)
 
 --------------------------------------------------------------------------------
 
