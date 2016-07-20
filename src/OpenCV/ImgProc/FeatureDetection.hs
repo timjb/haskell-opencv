@@ -232,13 +232,19 @@ houghLinesPTraces
 houghLinesPTraces = exceptError $ do
     buildingG <- cvtColor bgr gray building_868x600
     edgeImg <- canny 50 200 Nothing Nothing buildingG
+    edgeImgBgr <- cvtColor gray bgr edgeImg
     withMatM (Proxy :: Proxy [height, width])
              (Proxy :: Proxy channels)
              (Proxy :: Proxy depth)
              white $ \imgM -> do
       edgeImgM <- thaw edgeImg
       lineSegments <- houghLinesP 1 (pi / 180) 100 Nothing Nothing edgeImgM
-      pure ()
+      void $ matCopyToM imgM (V2 0 0) edgeImgBgr Nothing
+      forM_ lineSegments $ \lineSegment -> do
+        line imgM
+             (lineSegmentStart lineSegment)
+             (lineSegmentStop lineSegment)
+             red 3 LineType_AA 0
 @
 
 <<doc/generated/examples/houghLinesPTraces.png houghLinesPTraces>>
