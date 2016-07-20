@@ -1,10 +1,13 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# language QuasiQuotes #-}
+{-# language TemplateHaskell #-}
+{-# language NoImplicitPrelude #-}
 
 module OpenCV.ImgProc.FeatureDetection
     ( canny
     , houghCircles
+    , houghLinesP
     , Circle(..)
+    , LineSegment(..)
     ) where
 
 import "base" Control.Exception ( mask_ )
@@ -17,16 +20,18 @@ import "base" Foreign.Marshal.Array ( peekArray )
 import "base" Foreign.Marshal.Utils ( fromBool )
 import "base" Foreign.Ptr ( Ptr )
 import "base" Foreign.Storable ( peek )
+import "base" Prelude hiding ( lines )
+import "base" System.IO.Unsafe ( unsafePerformIO )
 import qualified "inline-c" Language.C.Inline as C
 import qualified "inline-c-cpp" Language.C.Inline.Cpp as C
-import "linear" Linear ( V2(..), V3(..) )
+import "linear" Linear ( V2(..), V3(..), V4(..) )
+import "primitive" Control.Monad.Primitive ( PrimMonad, PrimState, unsafePrimToPrim )
 import "this" OpenCV.C.Inline ( openCvCtx )
 import "this" OpenCV.C.Types
 import "this" OpenCV.Core.Types
 import "this" OpenCV.Core.Types.Mat.Internal
 import "this" OpenCV.Exception.Internal
 import "this" OpenCV.TypeLevel
-import "base" System.IO.Unsafe ( unsafePerformIO )
 
 --------------------------------------------------------------------------------
 
@@ -197,3 +202,104 @@ houghCircles dp minDist param1 param2 minRadius maxRadius src = unsafePerformIO 
         c'maxRadius = fromIntegral (fromMaybe 0 maxRadius)
         fromCFloat :: C.CFloat -> Float
         fromCFloat = realToFrac
+
+data LineSegment
+   = LineSegment
+     { lineSegmentStart :: !(V2 Int32)
+     , lineSegmentStop  :: !(V2 Int32)
+     } deriving Show
+
+instance FromVec4i LineSegment where
+    fromVec4i vec4i =
+        LineSegment
+        { lineSegmentStart = V2 x1 y1
+        , lineSegmentStop  = V2 x2 y2
+        }
+      where
+        V4 x1 y1 x2 y2 = fromVec4i vec4i
+
+{- |
+Example:
+
+@
+houghLinesPTraces
+  :: forall (width    :: Nat)
+            (height   :: Nat)
+            (channels :: Nat)
+            (depth    :: *  )
+   . (Mat (ShapeT [height, width]) ('S channels) ('S depth) ~ Building_868x600)
+  => Mat (ShapeT [height, width]) ('S channels) ('S depth)
+houghLinesPTraces = exceptError $ do
+    buildingG <- cvtColor bgr gray building_868x600
+    edgeImg <- canny 50 200 Nothing Nothing buildingG
+    withMatM (Proxy :: Proxy [height, width])
+             (Proxy :: Proxy channels)
+             (Proxy :: Proxy depth)
+             white $ \imgM -> do
+      edgeImgM <- thaw edgeImg
+      lineSegments <- houghLinesP 1 (pi / 180) 100 Nothing Nothing edgeImgM
+      pure ()
+@
+
+<<doc/generated/examples/houghLinesPTraces.png houghLinesPTraces>>
+
+-}
+houghLinesP
+  :: (PrimMonad m)
+  => Double
+     -- ^ Distance resolution of the accumulator in pixels.
+  -> Double
+     -- ^ Angle resolution of the accumulator in radians.
+  -> Int32
+     -- ^ Accumulator threshold parameter. Only those lines are returned that
+     -- get enough votes (> threshold).
+  -> Maybe Double
+     -- ^ Minimum line length. Line segments shorter than that are rejected.
+  -> Maybe Double
+     -- ^ Maximum allowed gap between points on the same line to link them.
+  -> MutMat ('S [h, w]) ('S 1) ('S Word8) (PrimState m)
+     -- ^ Source image. May be modified by the function.
+  -> m (V.Vector LineSegment)
+houghLinesP rho theta threshold minLineLength maxLineGap src = unsafePrimToPrim $
+    withPtr src $ \srcPtr ->
+    alloca $ \(linesLengthPtr :: Ptr Int32) ->
+    alloca $ \(linesPtrPtr :: Ptr (Ptr (Ptr C'Vec4i))) -> mask_ $ do
+      [C.block| void {
+        std::vector<cv::Vec4i> lines;
+        cv::HoughLinesP
+          ( *$(Mat * srcPtr)
+          , lines
+          , $(double  c'rho)
+          , $(double  c'theta)
+          , $(int32_t threshold)
+          , $(double  c'minLineLength)
+          , $(double  c'maxLineGap)
+          );
+
+        cv::Vec4i * * * linesPtrPtr = $(Vec4i * * * linesPtrPtr);
+        cv::Vec4i * * linesPtr = new cv::Vec4i * [lines.size()];
+        *linesPtrPtr = linesPtr;
+
+        *$(int32_t * linesLengthPtr) = lines.size();
+
+        for (std::vector<cv::Vec4i>::size_type i = 0; i != lines.size(); i++)
+        {
+          linesPtr[i] = new cv::Vec4i(lines[i]);
+        }
+      }|]
+      numLines <- fromIntegral <$> peek linesLengthPtr
+      linesPtr <- peek linesPtrPtr
+
+      (linePtrs :: [Ptr C'Vec4i]) <- peekArray numLines linesPtr
+      (lines    :: [Vec4i]) <- mapM (fromPtr . pure) linePtrs
+
+      [C.block| void {
+        delete *$(Vec4i * * * linesPtrPtr);
+      }|]
+
+      pure $ V.map fromVec4i $ V.fromList lines
+  where
+    c'rho           = realToFrac rho
+    c'theta         = realToFrac theta
+    c'minLineLength = maybe 0 realToFrac minLineLength
+    c'maxLineGap    = maybe 0 realToFrac maxLineGap
