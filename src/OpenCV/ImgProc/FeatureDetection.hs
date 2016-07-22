@@ -135,9 +135,7 @@ houghCircleTraces = exceptError $ do
 @
 
 <<doc/generated/examples/houghCircleTraces.png houghCircleTraces>>
-
 -}
-
 houghCircles
   :: Double
      -- ^ Inverse ratio of the accumulator resolution to the image resolution.
@@ -232,25 +230,23 @@ houghLinesPTraces
    . (Mat (ShapeT [height, width]) ('S channels) ('S depth) ~ Building_868x600)
   => Mat (ShapeT [height, width]) ('S channels) ('S depth)
 houghLinesPTraces = exceptError $ do
-    buildingG <- cvtColor bgr gray building_868x600
-    edgeImg <- canny 50 200 Nothing Nothing buildingG
+    edgeImg <- canny 50 200 Nothing Nothing building_868x600
     edgeImgBgr <- cvtColor gray bgr edgeImg
     withMatM (Proxy :: Proxy [height, width])
              (Proxy :: Proxy channels)
              (Proxy :: Proxy depth)
              white $ \imgM -> do
       edgeImgM <- thaw edgeImg
-      lineSegments <- houghLinesP 1 (pi / 180) 100 Nothing Nothing edgeImgM
+      lineSegments <- houghLinesP 1 (pi / 180) 80 (Just 30) (Just 10) edgeImgM
       void $ matCopyToM imgM (V2 0 0) edgeImgBgr Nothing
       forM_ lineSegments $ \lineSegment -> do
         line imgM
              (lineSegmentStart lineSegment)
-             (lineSegmentStop lineSegment)
-             red 3 LineType_AA 0
+             (lineSegmentStop  lineSegment)
+             red 2 LineType_8 0
 @
 
 <<doc/generated/examples/houghLinesPTraces.png houghLinesPTraces>>
-
 -}
 houghLinesP
   :: (PrimMonad m)
@@ -270,10 +266,14 @@ houghLinesP
   -> m (V.Vector LineSegment)
 houghLinesP rho theta threshold minLineLength maxLineGap src = unsafePrimToPrim $
     withPtr src $ \srcPtr ->
-    alloca $ \(linesLengthPtr :: Ptr Int32) ->
+    -- Pointer to number of lines.
+    alloca $ \(numLinesPtr :: Ptr Int32) ->
+    -- Pointer to array of Vec4i pointers. The array is allocated in
+    -- C++. Each element of the array points to a Vec4i that is also
+    -- allocated in C++.
     alloca $ \(linesPtrPtr :: Ptr (Ptr (Ptr C'Vec4i))) -> mask_ $ do
       [C.block| void {
-        std::vector<cv::Vec4i> lines;
+        std::vector<cv::Vec4i> lines = std::vector<cv::Vec4i>();
         cv::HoughLinesP
           ( *$(Mat * srcPtr)
           , lines
@@ -284,25 +284,29 @@ houghLinesP rho theta threshold minLineLength maxLineGap src = unsafePrimToPrim 
           , $(double  c'maxLineGap)
           );
 
+        *$(int32_t * numLinesPtr) = lines.size();
+
         cv::Vec4i * * * linesPtrPtr = $(Vec4i * * * linesPtrPtr);
         cv::Vec4i * * linesPtr = new cv::Vec4i * [lines.size()];
         *linesPtrPtr = linesPtr;
 
-        *$(int32_t * linesLengthPtr) = lines.size();
-
-        for (std::vector<cv::Vec4i>::size_type i = 0; i != lines.size(); i++)
+        for (std::vector<cv::Vec4i>::size_type ix = 0; ix != lines.size(); ix++)
         {
-          linesPtr[i] = new cv::Vec4i(lines[i]);
+          cv::Vec4i & org = lines[ix];
+          cv::Vec4i * newLine = new cv::Vec4i(org[0], org[1], org[2], org[3]);
+          linesPtr[ix] = newLine;
         }
       }|]
-      numLines <- fromIntegral <$> peek linesLengthPtr
+
+      numLines <- fromIntegral <$> peek numLinesPtr
       linesPtr <- peek linesPtrPtr
+      (lines :: [Vec4i]) <- mapM (fromPtr . pure) =<< peekArray numLines linesPtr
 
-      (linePtrs :: [Ptr C'Vec4i]) <- peekArray numLines linesPtr
-      (lines    :: [Vec4i]) <- mapM (fromPtr . pure) linePtrs
-
-      [C.block| void {
-        delete *$(Vec4i * * * linesPtrPtr);
+      -- Free the array of Vec4i pointers. This does not free the
+      -- Vec4i's pointed to by the elements of the array. That is the
+      -- responsibility of Haskell's Vec4i finalizer.
+      [CU.block| void {
+        delete [] *$(Vec4i * * * linesPtrPtr);
       }|]
 
       pure $ V.map fromVec4i $ V.fromList lines
